@@ -1,0 +1,142 @@
+# Dane startowe systemu.
+# Uzupełnij pola oznaczone TODO przed krokiem 2 planu.
+# Ten plik jest źródłem dla migracji seed — nie wpisuj danych ręcznie do bazy.
+
+meta:
+  location_name: "TODO — nazwa lokalizacji, np. Żelazna 67, Warszawa"
+  timezone: "Europe/Warsaw"
+  base_currency: "PLN"          # waluta wyceny na panelu
+
+entities:
+  - code: KRTX
+    name: "KRTX Sp. z o.o."
+    nip: "TODO"
+    krs: "TODO"
+    is_internal: true
+  - code: WRTX
+    name: "WRTX Sp. z o.o."
+    nip: "TODO"
+    krs: "0001181535"
+    is_internal: true
+  - code: STABILLON
+    name: "StaBillon — emitent e-pieniądza"
+    is_internal: false
+    role: emoney_issuer
+  - code: HYLLET_NET
+    name: "Hyllet Cash — sieć"
+    is_internal: false
+    role: network
+  # Kontrahenci OTC — dopisz wszystkich, z którymi rozliczacie się cyklicznie
+  - code: TODO_OTC_1
+    name: "TODO"
+    is_internal: false
+    role: otc_counterparty
+
+assets:
+  # kind: fiat | emoney | crypto
+  # scale: liczba miejsc po przecinku
+  # chain: obowiązkowe dla crypto — USDT@tron i USDT@ethereum to DWA różne aktywa
+  - { code: PLN,  kind: fiat,   scale: 2 }
+  - { code: EUR,  kind: fiat,   scale: 2 }
+  - { code: USD,  kind: fiat,   scale: 2 }
+  - { code: GBP,  kind: fiat,   scale: 2 }
+  # TODO — dopisz pozostałe waluty z tablicy kantoru
+
+  - { code: PLNdt, kind: emoney, scale: 2, issuer: STABILLON }
+  - { code: EURdt, kind: emoney, scale: 2, issuer: STABILLON }
+
+  - { code: BTC,  kind: crypto, scale: 8,  chain: bitcoin }
+  - { code: ETH,  kind: crypto, scale: 18, chain: ethereum }
+  - { code: USDT, kind: crypto, scale: 6,  chain: tron }
+  - { code: USDT, kind: crypto, scale: 6,  chain: ethereum }
+  # TODO — dopisz pozostałe tokeny i sieci, którymi realnie obracacie
+
+locations:
+  - code: KW
+    name: "Kasa kantoru walutowego"
+    kind: till
+    entity: KRTX
+    source_system: kantor_logic   # zasilana wyłącznie importem
+  - code: KH
+    name: "Kasa Hyllet"
+    kind: till
+    entity: TODO                  # ← PYTANIE 2: na której spółce jest kasa Hyllet?
+  - code: KZ
+    name: "Kasa wymian zewnętrznych (OTC)"
+    kind: till
+    entity: TODO                  # KRTX czy WRTX, albo obie — wtedy dwa konta na tej kasie
+  - code: SEJF
+    name: "Sejf"
+    kind: vault
+    entity: TODO
+  - code: BANK_KRTX
+    name: "TODO — nazwa banku i końcówka rachunku"
+    kind: bank
+    entity: KRTX
+  - code: BANK_WRTX
+    name: "TODO"
+    kind: bank
+    entity: WRTX
+  - code: WALLET_HOT
+    name: "Portfel operacyjny"
+    kind: wallet
+    entity: TODO
+    watch_only: true
+    addresses:
+      - { chain: tron, address: "TODO" }
+      - { chain: ethereum, address: "TODO" }
+  - code: EXCHANGE_OKX
+    name: "OKX"
+    kind: exchange
+    entity: TODO
+
+emoney_model:
+  # PYTANIE 4 — to zmienia kierunek księgowania EM-ISSUE i sens alertu FLOAT_LOW
+  prefunded: TODO               # true = float wykupiony z góry, konsumowany przy wydaniu
+                                # false = rozliczenie z emitentem po fakcie
+  margin_basis: TODO            # "percent" albo "fixed"
+  margin_value: TODO            # np. 0.03 albo kwota
+  network_share_basis: TODO     # udział sieci: "percent_of_value" albo "fixed_per_tx"
+  network_share_value: TODO
+  settlement_frequency: TODO    # np. "daily", "weekly"
+
+limits:
+  # progi alertów — patrz SPEC sekcja 8
+  transit_stale_hours: 4
+  otc_unsettled_hours: 2
+  recon_mismatch:
+    fiat: "1.00"
+    crypto_usd_equiv: "5.00"
+  float_low_pln: TODO
+  cash_max_pln:
+    KW: TODO                    # limit gotówki w kasie — ryzyko i warunki ubezpieczenia
+    KH: TODO
+    KZ: TODO
+  cash_min:
+    KW: { EUR: TODO, USD: TODO }
+
+denominations:
+  # do ślepego liczenia przy zamknięciu zmiany
+  PLN: [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1]
+  EUR: [500, 200, 100, 50, 20, 10, 5, 2, 1]
+  USD: [100, 50, 20, 10, 5, 2, 1]
+  # TODO — uzupełnij dla pozostałych walut, bilon osobno jeśli liczycie
+
+documents:
+  numbering:
+    # numeracja ciągła per podmiot, typ i rok
+    KP: "KP/{entity}/{seq}/{year}"
+    KW: "KW/{entity}/{seq}/{year}"
+    DW: "DW/{entity}/{seq}/{year}"    # dowód wewnętrzny — przesunięcia
+
+users:
+  # role: cashier | manager | accounting | mlro | admin
+  - { email: "TODO", role: admin, locations: [KW, KH, KZ, SEJF] }
+  - { email: "TODO", role: mlro, note: "Ryszard Nalepa — MLRO WRTX" }
+  # TODO — kasjerzy, kierownik, księgowość
+
+kantor_logic:
+  export_format: TODO           # PYTANIE 1 — wypełnić po obejrzeniu próbki
+  export_granularity: TODO      # "document" (nr dowodu) albo "daily_report"
+  external_id_pattern: TODO
+  sample_file: "docs/samples/kantor-logic-TODO.csv"
