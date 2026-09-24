@@ -1,5 +1,5 @@
 # Dane startowe systemu.
-# Uzupełnij pola oznaczone TODO przed krokiem 2 planu.
+# Uzupełnij pola oznaczone TODO przed krokiem, który ich wymaga (docs/PLAN.md, „Wymaga”).
 # Ten plik jest źródłem dla migracji seed — nie wpisuj danych ręcznie do bazy.
 
 meta:

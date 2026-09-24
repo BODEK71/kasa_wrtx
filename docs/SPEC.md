@@ -428,7 +428,8 @@ w jakimkolwiek miejscu ścieżki pieniądza jest błędem do odrzucenia na przeg
 
 ## 11. Otwarte pytania
 
-Do uzupełnienia w `docs/seed.yaml` przed krokiem 2 planu:
+Do uzupełnienia w `docs/seed.yaml` — każde przed krokiem, który go wymaga
+(pozycja „Wymaga” w `docs/PLAN.md`):
 
 1. Próbka eksportu z Kantor-Logic za jeden dzień (eksport księgowy + raport dzienny),
    dane klientów mogą być wyczyszczone — liczy się struktura.
