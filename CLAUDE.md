@@ -18,8 +18,9 @@ Złamanie którejkolwiek z nich to błąd krytyczny, nawet jeśli testy przechod
 
 1. **Saldo nie istnieje jako pole.** Stan to zawsze suma zapisów. Nie dodawaj kolumny
    `balance`, nie cache'uj salda bez wyraźnej decyzji w SPEC.
-2. **Podwójny zapis per aktywo.** Dla każdej operacji i każdego aktywa suma zapisów = 0.
-   Pilnuje tego constraint trigger w bazie. Nie wyłączaj go, nie obchodź.
+2. **Podwójny zapis per spółka i aktywo.** Dla każdej operacji, każdej spółki
+   (`accounts.entity_id`) i każdego aktywa suma zapisów = 0. Pilnuje tego constraint
+   trigger w bazie. Nie wyłączaj go, nie obchodź.
 3. **Tylko dopisywanie.** Żadnego UPDATE ani DELETE na `operations` i `postings`.
    Korekta to zawsze storno: nowa operacja z `reverses_id` i `reversal_reason`.
 4. **Kwoty jako `numeric` i `string`.** Nigdy `float`, nigdy `number` w JS, nigdy
@@ -27,8 +28,9 @@ Złamanie którejkolwiek z nich to błąd krytyczny, nawet jeśli testy przechod
    sum, procentów, marż i kursów.
 5. **Klient nie pisze do księgi.** Żadnego `.insert()` na `operations`/`postings` z frontu.
    Jedyna droga to funkcje RPC `security definer`.
-6. **Każdy ruch między podmiotami ma tytuł prawny.** `TR-INTERCO` bez `legal_basis`
-   ma się nie dać zapisać.
+6. **Każdy ruch między podmiotami ma tytuł prawny.** Operacja dotykająca ksiąg dwóch
+   spółek jest możliwa tylko jako `TR-INTERCO`, a `TR-INTERCO` bez `legal_basis` ma się
+   nie dać zapisać.
 7. **Import jest idempotentny.** `unique (source, external_id)`. Dwukrotny import tego
    samego pliku nie zmienia sald.
 8. **Integracje zewnętrzne nie księgują.** Blockchain, giełda, bank i Hyllet zasilają

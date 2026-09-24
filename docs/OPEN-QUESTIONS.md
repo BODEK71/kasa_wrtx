@@ -1,79 +1,26 @@
 # Otwarte pytania — krytyczny przegląd SPEC
 
-Ten dokument tylko nazywa problemy znalezione w `docs/SPEC.md` (w konfrontacji
-z `CLAUDE.md` i `docs/seed.yaml`) — nie proponuje rozwiązań. Podzielony na to,
-co blokuje start prac nad schematem/migracjami, i to, co można rozstrzygnąć
-później, w trakcie budowy.
+Ten dokument nazywa problemy znalezione w `docs/SPEC.md` (w konfrontacji
+z `CLAUDE.md` i `docs/seed.yaml`). Rozstrzygnięcia trafiają do
+`docs/DECISIONS.md` i do SPEC — tu zostaje tylko ślad, co i gdzie rozstrzygnięto.
 
 ## Blokujące
 
-Rzeczy dotykające kształtu schematu bazy lub logiki RPC — bez rozstrzygnięcia
-nie da się napisać pierwszej migracji ani pierwszej funkcji księgującej.
+Brak. Wszystkie punkty blokujące z przeglądu SPEC 0.1 są rozstrzygnięte w SPEC 0.2.
 
-1. **Sprzeczność co do liczby zapisów na operację.** SPEC §2 zasada 2: „Każda
-   operacja rozpisuje się na co najmniej dwa zapisy.” SPEC §4.3: `OTC-OPEN` —
-   „brak zapisów, tylko nagłówek + kurs”. Prawdopodobnie tak samo `SH-OPEN` /
-   `SH-CLOSE` (§4.4). Nie wiadomo, czy inwariant „≥2 postings” jest twardym
-   ograniczeniem w bazie (i wtedy te operacje nie mogą istnieć w `operations`
-   tak, jak opisano), czy jest warunkowy.
+## Rozstrzygnięte
 
-2. **Sprzeczność co do księgowania przez integracje zewnętrzne.** CLAUDE.md
-   zasada 8 i SPEC §6: blockchain / giełda / bank / Hyllet „nigdy nie tworzą
-   zapisów w księdze”, zasilają wyłącznie `external_balances`. Jednocześnie
-   `operations.source` (SPEC §3.2) ma wprost wartości `'chain' | 'exchange' |
-   'hyllet' | 'bank'` jako źródła *operacji*, czyli zapisów księgowych — nie
-   tylko sald zewnętrznych.
-
-3. **Sprzeczność co do obowiązkowości `legal_basis`.** SPEC §2 zasada 6: „Każda
-   operacja ma podmiot i tytuł prawny.” Schemat (§3.2) ma `legal_basis text
-   null`, a CLAUDE.md zasada 6 mówi węziej: obowiązkowy tylko przy ruchach
-   *między podmiotami* (przykład: `TR-INTERCO`). Nie wiadomo, czy reguła z §2
-   dotyczy dosłownie każdej operacji, czy jest tam sformułowana zbyt szeroko.
-
-4. **Brak tabeli `customers`.** `operations.customer_id` (§3.2) i §9 (AML,
-   „wspólna kartoteka klienta”) odwołują się do bytu klienta detalicznego,
-   którego nie ma w modelu danych (§3). Niejasne też, czy klienci mieliby żyć
-   w `entities` (opisanych w SPEC jako „podmioty prawne”), czy w osobnej
-   tabeli.
-
-5. **Model portfeli wieloadresowych vs schemat lokalizacji.** SPEC §3.1:
-   lokalizacja typu `wallet` ma pojedyncze pola `address, chain`. `seed.yaml`:
-   `WALLET_HOT` ma listę `addresses` z dwoma różnymi chainami (`tron`,
-   `ethereum`) pod jedną lokalizacją. Kształty się wykluczają.
-
-6. **Niejasna relacja `locations.entity_id` vs `accounts.entity_id`.** SPEC §1
-   (tabela kas) i `seed.yaml` (komentarz przy `KZ`) mówią, że kasa `KZ` może
-   obsługiwać dwa podmioty naraz („KRTX czy WRTX, albo obie — wtedy dwa konta
-   na tej kasie”), ale `locations` (§3.1) ma jedno pole `entity_id` na
-   lokalizację, podczas gdy `accounts` ma własne, niezależne `entity_id`. Nie
-   wiadomo, co wtedy oznacza `entity_id` na samej lokalizacji i czy jest w
-   ogóle potrzebne.
-
-7. **`accounts.location_id` a konta techniczne.** Schemat `accounts` (§3.2)
-   wymaga `location_id`. §3.2 wymienia listę „kont technicznych” (`TRANSIT`,
-   `FX_POSITION`, `MARGIN`, `FEES`, `DIFF`, `OPENING`, `SETTLE/STABILLON`,
-   `SETTLE/NETWORK`, `INTERCO/<podmiot>`, `RECV/<kontrahent>`), z których
-   część (PnL, rozrachunki, bilans otwarcia) nie ma naturalnego fizycznego
-   miejsca. Nie wiadomo, czy każde z nich wymaga syntetycznej lokalizacji,
-   czy `location_id` jest w praktyce nullable dla kont innych niż `real`.
-   Powiązane: jak klucz unikalny `(location_id, asset_id, entity_id)` ma
-   rozróżniać wielu kontrahentów pod `RECV/<kontrahent>` albo wiele spółek
-   pod `INTERCO/<podmiot>`.
-
-8. **Niepełna formuła księgowania `EM-ISSUE` / `EM-REDEEM`.** SPEC §4.2
-   wymienia cztery zapisy (`KH/PLN`, `SETTLE/STABILLON`, `MARGIN`,
-   `SETTLE/NETWORK`), ale nie mówi, w jakim aktywie księgowane są te trzy
-   ostatnie (PLN? PLNdt?) ani jaka jest zależność arytmetyczna między kwotą
-   gotówki, nominałem e-pieniądza, marżą i udziałem sieci, która ma dać sumę
-   zero per aktywo (§2 zasada 2). To centralna operacja systemu — bez tej
-   formuły nie da się napisać RPC.
-
-9. **Pola w `seed.yaml`, których nie ma w schemacie SPEC.** `entities` w
-   `seed.yaml` mają pole `role` (np. `emoney_issuer`, `network`,
-   `otc_counterparty`), `assets` mają pole `issuer`. Schemat w SPEC §3.1
-   (`entities`: `id, code, name, nip, krs, is_internal`; `assets`: `id, code,
-   kind, scale, chain, display_name, is_active`) nie przewiduje żadnego z
-   tych pól.
+| # | Problem (SPEC 0.1) | Rozstrzygnięcie |
+|---|---|---|
+| 1 | §2 wymaga ≥2 zapisów na operację, a `OTC-OPEN`, `SH-OPEN`, `SH-CLOSE` nie mają zapisów | ADR-0001 — `otc_deals` + `deal_id`; zmiany jako RPC na `shifts` |
+| 2 | `operations.source` dopuszczał `chain`/`exchange`/`hyllet`/`bank` wbrew zasadzie 8 | ADR-0002 — `source` ∈ {`ui`, `kantor_logic`}, hash w `tx_hash` |
+| 3 | §2.6 „każda operacja ma tytuł prawny” vs `legal_basis null` i CLAUDE.md zasada 6 | ADR-0003 — bilans per spółka; dwie spółki tylko przez `TR-INTERCO` z `legal_basis` |
+| 4 | Brak tabeli `customers` mimo `operations.customer_id` i §9 | ADR-0004 — osobna tabela; pola ustala MLRO (pkt 15) |
+| 5 | `wallet` z jednym `address, chain` vs lista adresów w `seed.yaml` | ADR-0005 — `location_addresses` |
+| 6 | `locations.entity_id` vs `accounts.entity_id` przy KZ „obu spółek” | ADR-0006 — jedno miejsce = jedna spółka; KZ = WRTX |
+| 7 | Konta techniczne bez lokalizacji; klucz kont nie rozróżnia kontrahentów | ADR-0007 — `kind` + `counterparty_id`, `location_id` tylko dla `holding` |
+| 8 | Niepełna formuła `EM-ISSUE`/`EM-REDEEM` (i „różnica → FX_POSITION”) | ADR-0008 — formuły dla tej samej waluty i z przewalutowaniem |
+| 9 | `role` i `issuer` w `seed.yaml` bez odpowiednika w schemacie | ADR-0009 — `entities.role`, `assets.issuer_entity_id`, `assets.underlying_asset_id` |
 
 ## Do rozstrzygnięcia później
 
@@ -87,14 +34,15 @@ można ustalić równolegle z pracami nad schematem.
     w seed.yaml).
 12. Pełna lista walut/tokenów i sieci (SPEC §11 pkt 3, `assets` w seed.yaml).
 13. Czy e-pieniądz jest prefinansowany czy rozliczany po fakcie, oraz podstawa
-    marży / udziału sieci (SPEC §11 pkt 4, `emoney_model.*` w seed.yaml) —
-    powiązane z punktem blokującym 8, ale samą decyzję biznesową można podjąć
-    równolegle z pracami nad schematem.
+    marży / udziału sieci (SPEC §11 pkt 4, `emoney_model.*` w seed.yaml).
+    Zapisy z ADR-0008 działają w obu modelach; decyzja wpływa na saldo startowe
+    `SETTLE/STABILLON` i sens alertu `FLOAT_LOW`.
 14. Progi alertów i limity kasowe, w tym brakujący próg ustawowy dla
     `THRESHOLD_AML`, którego nie ma nawet jako `TODO` w `limits` w seed.yaml
     (SPEC §11 pkt 5, §8).
 15. Zakres wspólnej kartoteki klienta między KRTX a WRTX — wprost oddane do
-    decyzji MLRO (SPEC §11 pkt 6, §9).
+    decyzji MLRO (SPEC §11 pkt 6, §9). Od tego zależą kolumny i RLS tabeli
+    `customers` (ADR-0004).
 16. Kto/co jest `created_by` dla operacji tworzonych automatycznie (import,
     storna z `KL_ROW_VANISHED`) — SPEC wymaga `created_by` „bez wyjątków” (§2
     zasada 8), ale nie mówi, jaka wartość reprezentuje „system” jako autora.
@@ -106,3 +54,20 @@ można ustalić równolegle z pracami nad schematem.
     zera.
 19. Adresy portfeli i dane banków to w większości `TODO` w `seed.yaml` — to
     dane do uzupełnienia, nie problem modelu.
+
+### Nowe — wynikające z rozstrzygnięć SPEC 0.2
+
+20. Waluta udziału sieci `S` przy przewalutowaniu — ADR-0008 przyjmuje walutę
+    gotówki; do potwierdzenia z umową sieci hyllet.cash.
+21. Skąd pochodzi kurs `r` przy `EM-*` z przewalutowaniem (tabela `rates`,
+    kurs podawany przez Hyllet, kurs z tablicy kasy?).
+22. Czy ujemna marża (`M < 0`) bywa dopuszczalna (promocja, kurs niekorzystny) —
+    ADR-0008 przyjmuje odrzucenie operacji.
+23. `external_id` storna generowanego przez import (`KL_ROW_VANISHED`): oryginał
+    zajmuje `(kantor_logic, external_id)`, więc storno nie może użyć tego samego
+    klucza.
+24. Wykrywanie `TRANSIT_STALE` na zbiorczym koncie `transit` per (spółka,
+    aktywo): kilka równoległych ruchów w drodze może się wzajemnie maskować, a
+    „od kiedy saldo jest niezerowe” jest niejednoznaczne.
+25. Przynależność SEJF, WALLET_HOT i EXCHANGE_OKX — po ADR-0006 każde miejsce
+    musi mieć jedną spółkę albo zostać rozbite na dwie lokalizacje.

@@ -1,7 +1,12 @@
 # SPEC — księga skarbcowa trzech kas
 
-Wersja 0.1 (robocza). Ten dokument jest źródłem prawdy dla implementacji.
+Wersja 0.2 (robocza). Ten dokument jest źródłem prawdy dla implementacji.
 Zmiana zachowania systemu zaczyna się od zmiany tego pliku, nie od zmiany kodu.
+
+Historia zmian:
+- 0.2 (2026-09-24) — rozstrzygnięte punkty blokujące z `docs/OPEN-QUESTIONS.md`,
+  uzasadnienia w `docs/DECISIONS.md` (ADR-0001…ADR-0009).
+- 0.1 — wersja wyjściowa.
 
 ---
 
@@ -13,7 +18,7 @@ W jednej lokalizacji działają trzy kasy:
 |---|---|---|
 | **KW** — kantor walutowy | kupno/sprzedaż walut obcych za PLN, wpis NBP | KRTX |
 | **KH** — kasa Hyllet | przyjęcie gotówki → wydanie e-pieniądza (PLNdt/EURdt) w modelu hyllet.cash | *do uzupełnienia w seed.yaml* |
-| **KZ** — kasa wymian zewnętrznych | transakcje OTC krypto z kontrahentami | WRTX / KRTX |
+| **KZ** — kasa wymian zewnętrznych | transakcje OTC krypto z kontrahentami | WRTX (ADR-0006) |
 
 Cel systemu: w każdej chwili wiadomo **gdzie jest wartość, w jakim aktywie i czyja jest**.
 Produktem ubocznym, równie ważnym, jest ślad audytowy: kontrola NBP, GIIF, due diligence
@@ -31,16 +36,21 @@ Te reguły mają pierwszeństwo przed wygodą, wydajnością i terminem.
 
 1. **Stan nigdy nie jest wpisywany.** Saldo dowolnego konta to zawsze suma zapisów.
    Nie istnieje kolumna „saldo”, którą można nadpisać.
-2. **Podwójny zapis per aktywo.** Każda operacja rozpisuje się na co najmniej dwa zapisy.
-   Dla każdego aktywa w obrębie operacji suma kwot ze znakiem wynosi zero.
+2. **Podwójny zapis per spółka i aktywo.** Każda operacja rozpisuje się na co najmniej
+   dwa zapisy. Dla każdej spółki (czyje księgi, `accounts.entity_id`) i każdego aktywa
+   w obrębie operacji suma kwot ze znakiem wynosi zero. Zdarzenia bez ruchu wartości
+   (uzgodnienie warunków OTC, otwarcie/zamknięcie zmiany) nie są operacjami
+   (ADR-0001, ADR-0003).
 3. **Tylko dopisywanie.** `operations` i `postings` nie podlegają UPDATE ani DELETE.
    Korekta = storno, czyli nowa operacja odwracająca, z referencją do oryginału i powodem.
 4. **Kwoty tylko dziesiętne.** `numeric` w bazie, string na granicy API, `decimal.js` w JS.
    Typ `float`/`number` dla kwoty jest błędem krytycznym, nie stylistycznym.
 5. **Zapisu nie tworzy klient.** Front nie ma prawa INSERT na `operations`/`postings`.
    Jedyna droga to funkcje RPC w Postgresie.
-6. **Każda operacja ma podmiot i tytuł prawny.** Ruch wartości między KRTX a WRTX to
-   transakcja z dokumentem, nie przełożenie z szuflady do szuflady.
+6. **Każda operacja ma podmiot; ruch między spółkami ma tytuł prawny.** Operacja, której
+   zapisy dotykają ksiąg więcej niż jednej spółki własnej, jest możliwa wyłącznie jako
+   `TR-INTERCO` z niepustym `legal_basis`. Ruch wartości między KRTX a WRTX to
+   transakcja z dokumentem, nie przełożenie z szuflady do szuflady (ADR-0003).
 7. **Idempotencja importu.** Ponowny import tego samego pliku nie tworzy nowych zapisów.
 8. **Każdy zapis ma autora i czas serwera.** `created_by`, `created_at = now()`, bez wyjątków.
 
@@ -50,40 +60,68 @@ Te reguły mają pierwszeństwo przed wygodą, wydajnością i terminem.
 
 ### 3.1 Słowniki
 
-**`entities`** — podmioty prawne
-`id, code, name, nip, krs, is_internal`
+**`entities`** — podmioty prawne, z którymi prowadzimy rozrachunki
+`id, code, name, nip, krs, is_internal, role`
 Przykłady: `KRTX`, `WRTX`, `STABILLON` (emitent), `HYLLET_NET` (sieć), kontrahenci OTC.
 `is_internal = true` dla spółek własnych.
+- `role`: `emoney_issuer` | `network` | `otc_counterparty` | `null` (spółki własne) (ADR-0009)
+- Klienci detaliczni **nie** są w `entities` — patrz `customers` (ADR-0004).
 
 **`assets`** — aktywa
-`id, code, kind, scale, chain, display_name, is_active`
+`id, code, kind, scale, chain, issuer_entity_id, underlying_asset_id, display_name, is_active`
 - `kind`: `fiat` | `emoney` | `crypto`
 - `scale`: liczba miejsc po przecinku (PLN 2, BTC 8, ETH 18, USDT 6)
 - `chain`: dla krypto obowiązkowe (`tron`, `ethereum`, `bsc`, …)
+- `issuer_entity_id`, `underlying_asset_id`: obowiązkowe wtedy i tylko wtedy, gdy
+  `kind = emoney` — emitent (`role = emoney_issuer`) i waluta fiat, z którą e-pieniądz
+  jest 1:1 (PLNdt → PLN, EURdt → EUR) (ADR-0009)
 - Klucz naturalny to `(code, chain)`. `USDT@tron` i `USDT@ethereum` to **dwa różne aktywa**.
   Zamiana jednego na drugie to operacja, nie to samo saldo.
+- Aktywa `emoney` nie mają kont księgowych — e-pieniądz nie jest naszym aktywem, występuje
+  tylko w `external_balances` i jako argument operacji `EM-*` (ADR-0008).
 
 **`locations`** — miejsca
 `id, code, name, kind, entity_id, is_active`
-- `kind`: `till` (kasa) | `vault` (sejf) | `bank` | `wallet` | `exchange` | `transit` | `external`
-- Dla `wallet`: `address`, `chain`, `watch_only = true`
-- `entity_id` mówi, czyje jest miejsce
+- `kind`: `till` (kasa) | `vault` (sejf) | `bank` | `wallet` | `exchange`
+- `entity_id` (NOT NULL) mówi, czyje jest miejsce. Jedno miejsce należy do jednej spółki.
+  Fizycznie wspólny schowek dwóch spółek to dwie lokalizacje z osobnym liczeniem (ADR-0006).
+- Dla `wallet`: `watch_only = true`, adresy w `location_addresses`
 
-**`accounts`** — konta księgowe
-`id, location_id, asset_id, entity_id, kind`
-Klucz unikalny: `(location_id, asset_id, entity_id)`.
-- `kind`: `real` (gotówka, saldo portfela) | `receivable` (należność) | `payable` (zobowiązanie)
-  | `pnl` (marża, opłaty, różnice kursowe) | `suspense` (manko/nadwyżka) | `equity` (bilans otwarcia)
+**`location_addresses`** — adresy portfeli watch-only (ADR-0005)
+`id, location_id, chain, address`
+Klucz unikalny: `(chain, address)`. Jeden portfel może mieć adresy w wielu sieciach.
+Konto `holding` w lokalizacji `wallet` na aktywie z siecią X wymaga adresu tej lokalizacji
+w sieci X.
 
-Konta techniczne, które muszą istnieć:
-- `TRANSIT` — wartość w drodze (gotówka do banku, transfer niepotwierdzony, przekazanie między kasami)
-- `RECV/<kontrahent>` — rozrachunek OTC
-- `SETTLE/STABILLON` — rozliczenie z emitentem e-pieniądza
-- `SETTLE/NETWORK` — udział sieci hyllet.cash
-- `INTERCO/<podmiot>` — rozrachunek między spółkami własnymi
-- `FX_POSITION` — pozycja wymiany (druga strona kupna/sprzedaży waluty)
-- `MARGIN`, `FEES`, `DIFF` — marża, opłaty, manko/nadwyżka
-- `OPENING` — bilans otwarcia
+**`accounts`** — konta księgowe (ADR-0007)
+`id, entity_id, asset_id, kind, location_id, counterparty_id`
+Klucz unikalny: `unique nulls not distinct (entity_id, asset_id, kind, location_id, counterparty_id)`.
+- `entity_id` — czyje księgi; zawsze spółka własna (`is_internal = true`)
+- `location_id` — obowiązkowe dla `holding`, zakazane dla pozostałych rodzajów;
+  dla `holding` `entity_id = locations.entity_id`
+- `counterparty_id` — obowiązkowe dla `recv`, `settle`, `interco`, zakazane dla pozostałych
+
+| `kind` | Zapis w tym dokumencie | `location_id` | `counterparty_id` | Klasa raportowa |
+|---|---|---|---|---|
+| `holding` | `KW/PLN`, `portfel/USDT`, `bank/PLN` | wymagane | — | środki |
+| `transit` | `TRANSIT` — wartość w drodze (gotówka do banku, transfer niepotwierdzony, przekazanie między kasami) | — | — | środki w drodze |
+| `recv` | `RECV/<kontrahent>` — rozrachunek OTC | — | `role = otc_counterparty` | rozrachunek |
+| `settle` | `SETTLE/STABILLON`, `SETTLE/NETWORK` — rozliczenie z emitentem / udział sieci hyllet.cash | — | `role = emoney_issuer` / `network` | rozrachunek |
+| `interco` | `INTERCO/<podmiot>` — rozrachunek między spółkami własnymi | — | spółka własna ≠ `entity_id` | rozrachunek |
+| `fx_position` | `FX_POSITION` — pozycja wymiany | — | — | pozycja walutowa |
+| `margin` | `MARGIN` | — | — | wynik |
+| `fees` | `FEES` | — | — | wynik |
+| `diff` | `DIFF` — manko/nadwyżka | — | — | rozliczenie różnic |
+| `opening` | `OPENING` — bilans otwarcia | — | — | kapitał |
+
+Rozrachunek ma jedno konto per (spółka, aktywo, kontrahent); znak salda mówi, kto komu jest
+winien — nie ma osobnych kont należności i zobowiązań.
+
+Konwencja znaków: `+` debet (środki, należności, koszty), `−` kredyt (zobowiązania,
+przychody). Przychód na `margin` ma więc znak `−`.
+
+Konwencja `FX_POSITION`: w wymianie aktywa A na aktywo B każde aktywo bilansuje się osobno —
+druga noga w każdym aktywie trafia na `fx_position` tego aktywa (ADR-0008).
 
 ### 3.2 Rdzeń
 
@@ -94,36 +132,62 @@ op_type           text        -- kod z katalogu, sekcja 4
 occurred_at       timestamptz -- moment zdarzenia
 created_at        timestamptz default now()
 created_by        uuid        -- użytkownik
-entity_id         uuid        -- podmiot prowadzący operację
+entity_id         uuid        -- spółka prowadząca operację
 shift_id          uuid null   -- zmiana kasowa, jeśli dotyczy
 counterparty_id   uuid null   -- kontrahent (entities)
-customer_id       uuid null   -- klient detaliczny
-legal_basis       text null   -- tytuł prawny przy ruchach między podmiotami
-source            text        -- 'ui' | 'kantor_logic' | 'chain' | 'exchange' | 'hyllet' | 'bank'
-external_id       text null   -- nr dowodu / hash / id zewnętrzne
+customer_id       uuid null   -- klient detaliczny (customers)
+deal_id           uuid null   -- transakcja OTC (otc_deals); obowiązkowe dla OTC-CASH, OTC-CRYPTO
+legal_basis       text null   -- tytuł prawny; obowiązkowy dla TR-INTERCO
+source            text        -- 'ui' | 'kantor_logic'
+external_id       text null   -- nr dowodu / id zewnętrzne z importu
+tx_hash           text null   -- hash transakcji on-chain; obowiązkowy dla OTC-CRYPTO, TR-WALLET
 reverses_id       uuid null   -- storno: wskazanie operacji odwracanej
 reversal_reason   text null
 note              text null
 ```
 `unique (source, external_id) where external_id is not null` — to jest gwarancja idempotencji.
 
+`source` mówi, którym kanałem operacja weszła do księgi: człowiek przez RPC (`ui`) albo
+import Kantor-Logic. Blockchain, giełda, Hyllet i bank nie są źródłami operacji — zasilają
+wyłącznie `external_balances` (sekcja 6, ADR-0002). `tx_hash` jest dowodem wpisanym przez
+człowieka, nie kluczem idempotencji: jedna transakcja on-chain może stać za kilkoma
+operacjami (noga i opłata), więc nie jest unikalny.
+
 **`postings`**
 ```
 id            bigserial pk
 operation_id  uuid not null
 account_id    uuid not null
-amount        numeric(38,18) not null  -- ze znakiem, + przychód / − rozchód
+amount        numeric(38,18) not null  -- ze znakiem: + debet (wpływ środków) / − kredyt (wypływ, zobowiązanie, przychód)
 seq           int not null
 ```
 Ograniczenia:
 - `amount <> 0`
 - skala `amount` ≤ `assets.scale` konta (trigger)
-- **constraint trigger DEFERRABLE INITIALLY DEFERRED**: dla każdej operacji i każdego aktywa
-  `sum(amount) = 0`
+- **constraint trigger DEFERRABLE INITIALLY DEFERRED** na `postings`: dla każdej operacji,
+  każdej spółki (`accounts.entity_id`) i każdego aktywa `sum(amount) = 0`
+- **constraint trigger DEFERRABLE INITIALLY DEFERRED** na `operations`: operacja ma co
+  najmniej dwa zapisy; jeśli zapisy dotykają ksiąg więcej niż jednej spółki, to
+  `op_type = 'TR-INTERCO'` i `legal_basis` niepusty; w pozostałych operacjach
+  `accounts.entity_id = operations.entity_id` dla każdego zapisu (ADR-0003)
 - brak polityk RLS na UPDATE/DELETE + `FORCE ROW LEVEL SECURITY`
+
+**`otc_deals`** — uzgodnione warunki transakcji OTC (ADR-0001)
+`id, entity_id, counterparty_id, agreed_at, base_asset_id, base_amount, quote_asset_id, quote_amount, note, created_by, created_at`
+Tylko dopisywanie, jak `operations`. Kurs = `quote_amount / base_amount`. Nie ma zapisów
+księgowych — wartość rusza się dopiero w operacjach `OTC-CASH` / `OTC-CRYPTO` z `deal_id`.
+Stan „otwarta / zamknięta” nie jest polem: wynika z salda `recv` dla operacji z tym `deal_id`.
+
+**`customers`** — klienci detaliczni (ADR-0004)
+Osoby i firmy identyfikowane na potrzeby AML, bez kont księgowych. `operations.customer_id`
+wskazuje tutaj. Zakres pól identyfikacyjnych i widoczność między spółkami ustala MLRO
+(sekcja 9) — do tego czasu tabela nie wchodzi do migracji rdzenia.
 
 **`shifts`** — zmiany kasowe
 `id, location_id, opened_at, opened_by, closed_at, closed_by, status`
+Otwarcie i zamknięcie zmiany to funkcje RPC (`shift_open`, `shift_close`), nie operacje
+księgowe. Zamknięcie jest jednorazowe: `closed_at`/`closed_by` przechodzą z `null` na
+wartość i nie zmieniają się później (trigger) (ADR-0001).
 
 **`shift_counts`** — ślepe liczenie
 `id, shift_id, asset_id, denomination, qty, counted_at, counted_by`
@@ -151,7 +215,8 @@ Nigdy nie wpływa na księgę. Służy wyłącznie do uzgodnienia i alertów.
 
 - `v_account_balances` — saldo per konto (suma zapisów)
 - `v_position` — miejsce × aktywo × podmiot, z wyceną w PLN wg `rates`
-- `v_open_otc` — transakcje OTC z niezerowym rozrachunkiem
+- `v_open_otc` — transakcje OTC (`otc_deals`) z niezerowym saldem `recv` liczonym po
+  operacjach z danym `deal_id`
 - `v_transit` — niezerowe salda `TRANSIT` (każde powyżej progu czasu to alert)
 - `v_daily_kw` — dzień kasy walutowej z importu, do uzgodnienia z raportem Kantor-Logic
 
@@ -165,8 +230,8 @@ Każdy typ to osobna funkcja RPC. Argumenty są jawne, księgowanie jest w jedny
 
 | Kod | Zdarzenie | Zapisy |
 |---|---|---|
-| `KL-BUY` | kupno waluty od klienta | `+` KW/waluta, `−` KW/PLN, różnica → `FX_POSITION` |
-| `KL-SELL` | sprzedaż waluty klientowi | `−` KW/waluta, `+` KW/PLN, różnica → `FX_POSITION` |
+| `KL-BUY` | kupno waluty od klienta | waluta: `+` KW/waluta, `−` `FX_POSITION`/waluta; PLN: `−` KW/PLN, `+` `FX_POSITION`/PLN |
+| `KL-SELL` | sprzedaż waluty klientowi | waluta: `−` KW/waluta, `+` `FX_POSITION`/waluta; PLN: `+` KW/PLN, `−` `FX_POSITION`/PLN |
 | `KL-CASHIN` | wpłata do kasy KW | `+` KW/aktywo, `−` `TRANSIT` |
 | `KL-CASHOUT` | wypłata z kasy KW | `−` KW/aktywo, `+` `TRANSIT` |
 
@@ -177,42 +242,77 @@ Każdy typ to osobna funkcja RPC. Argumenty są jawne, księgowanie jest w jedny
 
 | Kod | Zdarzenie | Zapisy |
 |---|---|---|
-| `EM-ISSUE` | klient wpłaca gotówkę, dostaje e-pieniądz | `+` KH/PLN (gotówka); `−` `SETTLE/STABILLON` o nominał; `+` `MARGIN` o marżę; `−` `SETTLE/NETWORK` o udział sieci |
-| `EM-REDEEM` | klient przychodzi po gotówkę za e-pieniądz | odwrotnie |
+| `EM-ISSUE` | klient wpłaca gotówkę, dostaje e-pieniądz | poniżej |
+| `EM-REDEEM` | klient oddaje e-pieniądz, dostaje gotówkę | poniżej |
 | `EM-SETTLE` | przelew do/od emitenta | `+/−` bank, `−/+` `SETTLE/STABILLON` |
 | `EM-NETFEE` | rozliczenie z siecią | `+/−` bank, `−/+` `SETTLE/NETWORK` |
 
-**Uwaga modelowa:** po stronie gotówki nie powstaje krypto. Powstaje zobowiązanie wobec
-emitenta i przychód z marży. Jeśli e-pieniądz jest prefinansowany (patrz `seed.yaml`),
-`SETTLE/STABILLON` startuje z saldem dodatnim i `EM-ISSUE` je konsumuje — wtedy alert
-„kończy się float” jest kluczowym sygnałem operacyjnym.
+Oznaczenia (ADR-0008): `C` — waluta gotówki w kasie; `E` — waluta bazowa wydanego
+e-pieniądza (`assets.underlying_asset_id`, np. EURdt → EUR); `G` — gotówka od/do klienta
+w `C`; `N` — nominał e-pieniądza w `E`; `S` — udział sieci w `C`; `M` — marża w `C`,
+zawsze wyliczana jako reszta. Wszystkie zapisy są w walutach fiat — e-pieniądz nie ma kont.
+
+**Ta sama waluta (`C = E`)**, `M = G − N − S` przy wydaniu, `M = N − G − S` przy wykupie:
+
+| Konto | `EM-ISSUE` | `EM-REDEEM` |
+|---|---|---|
+| KH/C | `+G` | `−G` |
+| `SETTLE/STABILLON`/C | `−N` | `+N` |
+| `SETTLE/NETWORK`/C | `−S` | `−S` |
+| `MARGIN`/C | `−M` | `−M` |
+
+**Przewalutowanie (`C ≠ E`)** — RPC dostaje jawnie kurs `r` (`E` → `C`);
+`X = round(N · r, scale(C))`; `M = G − S − X` przy wydaniu, `M = X − G − S` przy wykupie.
+Różnica zaokrąglenia trafia w `M`, więc suma zawsze wynosi zero:
+
+| Konto | `EM-ISSUE` | `EM-REDEEM` |
+|---|---|---|
+| KH/C | `+G` | `−G` |
+| `SETTLE/NETWORK`/C | `−S` | `−S` |
+| `MARGIN`/C | `−M` | `−M` |
+| `FX_POSITION`/C | `−X` | `+X` |
+| `FX_POSITION`/E | `+N` | `−N` |
+| `SETTLE/STABILLON`/E | `−N` | `+N` |
+
+Reguły: `M = 0` — brak zapisu na `MARGIN`; `M < 0` — RPC odrzuca operację (zmiana tej
+reguły wymaga ADR); `S = 0` — brak zapisu na `SETTLE/NETWORK`.
+
+**Uwaga modelowa:** po stronie gotówki nie powstaje krypto ani e-pieniądz na naszym koncie.
+Powstaje rozrachunek z emitentem i przychód z marży. Jeśli e-pieniądz jest prefinansowany
+(patrz `seed.yaml`), `SETTLE/STABILLON` startuje z saldem dodatnim i `EM-ISSUE` je
+konsumuje — wtedy alert „kończy się float” jest kluczowym sygnałem operacyjnym. Te same
+zapisy obsługują model rozliczany po fakcie — wtedy saldo po prostu schodzi poniżej zera.
 
 ### 4.3 OTC
 
 | Kod | Zdarzenie | Zapisy |
 |---|---|---|
-| `OTC-OPEN` | uzgodnienie warunków | brak zapisów, tylko nagłówek + kurs |
-| `OTC-CASH` | noga gotówkowa | `+/−` KZ/waluta, `−/+` `RECV/<kontrahent>` |
-| `OTC-CRYPTO` | noga krypto (hash obowiązkowy) | `+/−` portfel/aktywo, `−/+` `RECV/<kontrahent>` |
+| `OTC-CASH` | noga gotówkowa (`deal_id` obowiązkowe) | `+/−` KZ/waluta, `−/+` `RECV/<kontrahent>` |
+| `OTC-CRYPTO` | noga krypto (`deal_id` i `tx_hash` obowiązkowe) | `+/−` portfel/aktywo, `−/+` `RECV/<kontrahent>` |
 | `OTC-FEE` | opłata sieciowa | `−` portfel/aktywo, `+` `FEES` |
 
-Transakcja jest zamknięta, gdy `RECV/<kontrahent>` dla tej transakcji jest zerowy we
-wszystkich aktywach. Dopóki nie jest — widać dokładnie, kto komu i ile jest winien.
-To jest odpowiedź na pytanie „gdzie w tym momencie jest wartość”.
+Uzgodnienie warunków nie jest operacją — to wpis w `otc_deals` przez RPC `otc_deal_open`,
+bez zapisów księgowych (ADR-0001).
+
+Transakcja jest zamknięta, gdy suma zapisów na `RECV/<kontrahent>` z operacji o jej
+`deal_id` jest zerowa we wszystkich aktywach. Dopóki nie jest — widać dokładnie, kto komu
+i ile jest winien. To jest odpowiedź na pytanie „gdzie w tym momencie jest wartość”.
 
 ### 4.4 Skarbiec
 
 | Kod | Zdarzenie |
 |---|---|
 | `TR-MOVE` | przesunięcie w ramach jednego podmiotu (kasa ↔ sejf ↔ kasa) przez `TRANSIT` |
-| `TR-INTERCO` | przesunięcie między spółkami własnymi: dokument po obu stronach + `INTERCO`, wymaga `legal_basis` |
+| `TR-INTERCO` | przesunięcie między spółkami własnymi: dokument po obu stronach + `INTERCO`, wymaga `legal_basis`; jedyna operacja dotykająca ksiąg dwóch spółek, każda z nich bilansuje się osobno |
 | `TR-BANK` | bank ↔ kasa/sejf przez `TRANSIT` |
-| `TR-WALLET` | transfer między własnymi portfelami/giełdą, z hashem i opłatą |
-| `TR-TRADE` | wymiana na giełdzie: `−` aktywo A, `+` aktywo B, różnica → `FX_POSITION` |
-| `SH-OPEN` / `SH-CLOSE` | otwarcie i zamknięcie zmiany |
+| `TR-WALLET` | transfer między własnymi portfelami/giełdą, z `tx_hash` i opłatą |
+| `TR-TRADE` | wymiana na giełdzie: A: `−` giełda/A, `+` `FX_POSITION`/A; B: `+` giełda/B, `−` `FX_POSITION`/B |
 | `ADJ-DIFF` | manko/nadwyżka z liczenia: `+/−` kasa, `−/+` `DIFF`, wymaga wyjaśnienia |
 | `ADJ-STORNO` | odwrócenie operacji, wymaga `reverses_id` i `reversal_reason` |
 | `ADJ-OPENING` | bilans otwarcia: `+` konto, `−` `OPENING` |
+
+Otwarcie i zamknięcie zmiany nie są operacjami księgowymi — to RPC `shift_open` /
+`shift_close` na tabeli `shifts` (ADR-0001).
 
 ---
 
@@ -337,3 +437,5 @@ Do uzupełnienia w `docs/seed.yaml` przed krokiem 2 planu:
 4. Czy e-pieniądz jest prefinansowany, czy rozliczany z emitentem po fakcie.
 5. Progi alertów i limity kasowe.
 6. Zakres wspólnej kartoteki klienta między KRTX a WRTX — stanowisko MLRO.
+
+Pełna, bieżąca lista otwartych i rozstrzygniętych pytań: `docs/OPEN-QUESTIONS.md`.

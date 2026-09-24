@@ -42,8 +42,9 @@ assets:
   - { code: GBP,  kind: fiat,   scale: 2 }
   # TODO — dopisz pozostałe waluty z tablicy kantoru
 
-  - { code: PLNdt, kind: emoney, scale: 2, issuer: STABILLON }
-  - { code: EURdt, kind: emoney, scale: 2, issuer: STABILLON }
+  # underlying: waluta fiat 1:1 — w niej księgowany jest SETTLE/STABILLON (ADR-0008, ADR-0009)
+  - { code: PLNdt, kind: emoney, scale: 2, issuer: STABILLON, underlying: PLN }
+  - { code: EURdt, kind: emoney, scale: 2, issuer: STABILLON, underlying: EUR }
 
   - { code: BTC,  kind: crypto, scale: 8,  chain: bitcoin }
   - { code: ETH,  kind: crypto, scale: 18, chain: ethereum }
@@ -64,11 +65,11 @@ locations:
   - code: KZ
     name: "Kasa wymian zewnętrznych (OTC)"
     kind: till
-    entity: TODO                  # KRTX czy WRTX, albo obie — wtedy dwa konta na tej kasie
+    entity: WRTX                  # ADR-0006
   - code: SEJF
     name: "Sejf"
     kind: vault
-    entity: TODO
+    entity: TODO                  # jedna spółka; sejf wspólny dla dwóch spółek = dwie lokalizacje (ADR-0006)
   - code: BANK_KRTX
     name: "TODO — nazwa banku i końcówka rachunku"
     kind: bank
